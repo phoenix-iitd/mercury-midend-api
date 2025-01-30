@@ -163,7 +163,7 @@ async def validate_api_request(request: Request):
         )
 
     try:
-        if SECRET_KEY != secret_key:
+        if secret_key != SECRET_KEY:
             logger.warning("Invalid secret key")
             return JSONResponse(
                 status_code=401,
@@ -461,19 +461,15 @@ async def request_logging_middleware(request: Request, call_next):
         )
         raise
 
-if __name__ == "__main__":
-    # Development settings with live reload
-    is_dev = os.getenv("ENVIRONMENT", "development").lower() == "development"
-    
+if __name__ == "__main__":    
     uvicorn.run(
         "server:app",
-        host="0.0.0.0",
-        port=int(os.getenv("PORT", 8000)),
+        host=os.getenv("MIDEND_BASE_URL"),
+        port=int(os.getenv("MIDEND_PORT", 8000)),
         log_level="debug" if IS_DEV else "info",
         access_log=True,
         reload=IS_DEV,  # Enable auto-reload in development
         reload_dirs=["./"] if IS_DEV else None,  # Watch current directory
         reload_delay=0.25,  # Delay between reloads
         workers=1 if IS_DEV else None,  # Single worker in dev mode
-        loop="uvloop"  # Use uvloop for better async performance
     )
