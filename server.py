@@ -257,12 +257,9 @@ class ErrorResponse(BaseModel):
     message: str
 
 # Optimized API request implementation
-async def secure_api_request(client: httpx.AsyncClient, endpoint: str, data: dict, group_name: str) -> dict:
-    """Secure API request implementation with request signing and retry logic"""
-    api_url = f"http://{API_CONFIG['base_url']}:{API_CONFIG['port']}/{endpoint}"  # Use HTTP for internal network
-    
-    # Add random delay between 1 and 3 seconds
-    delay = random.uniform(4.0, 6.0)
+def secure_api_request(endpoint: str, data: dict, group_name: str) -> dict:
+    """Secure API request implementation with request signing"""
+    api_url = f"http://{API_CONFIG['base_url']}:{API_CONFIG['port']}/{endpoint}"
     
     headers = {
         "Authorization": f"Basic {API_CONFIG['auth']}",
@@ -270,7 +267,7 @@ async def secure_api_request(client: httpx.AsyncClient, endpoint: str, data: dic
     }
 
     try:
-        response = await client.post(
+        response = httpx.post(
             api_url,
             json=data,
             headers=headers,
@@ -278,74 +275,80 @@ async def secure_api_request(client: httpx.AsyncClient, endpoint: str, data: dic
             follow_redirects=True
         )
         response.raise_for_status()
-        await asyncio.sleep(delay)
-        logger.info(f"Message sent to {group_name} ({data['phone']}) after {delay:.1f}s delay")
+        logger.info(f"Message sent to {group_name} ({data['phone']})")
         return response.json()
     except Exception as error:
         logger.error(f"Failed to send message to {group_name} ({data['phone']}): {str(error)}")
         raise
 
-# Update the execute_queue endpoint
 @app.post("/executeQueue", response_model=Union[QueueResponse, ErrorResponse])
 @conditional_limit("5/minute")
-@log_performance
-async def execute_queue(
+def execute_queue(
     request_data: QueueRequest,
     request: Request
 ):
-    # Validate API key first
-    validation_result = await validate_api_request(request)
+    validation_result = validate_api_request(request)
     if isinstance(validation_result, JSONResponse):
         return validation_result
 
-    # Rest of the execute_queue function remains the same
     start_time = perf_counter()
     
     try:
-        batch_size = 5 if IS_DEV else 3  # Reduced batch size due to delays
         success_count = 0
         failed_count = 0
+        total_messages = len(request_data.data)
         
-        async with get_client_pool() as client:
-            # Process in larger chunks with concurrent execution
-            chunks = [request_data.data[i:i + batch_size] 
-                     for i in range(0, len(request_data.data), batch_size)]
-            
-            for chunk in chunks:
-                tasks = []
-                for group in chunk:
-                    endpoint = "send/image" if len(request_data.filePath) > 0 else "send/message"
-                    payload = {
-                        "phone": group.id,
-                        "message": request_data.message if not len(request_data.filePath) > 0 else None,
-                        "caption": request_data.message if len(request_data.filePath) > 0 else None,
-                        **({"image_url": request_data.filePath} if len(request_data.filePath) > 0 else {})
-                    }
-                    tasks.append(secure_api_request(client, endpoint, payload, group.name))
+        logger.info(f"Starting to process {total_messages} messages")
+        
+        for index, group in enumerate(request_data.data, 1):
+            try:
+                # Add initial delay before first message
+                if index == 1:
+                    initial_delay = random.uniform(2, 3)
+                    logger.info(f"Initial delay: {initial_delay:.1f} seconds")
+                    time.sleep(initial_delay)
                 
-                # Execute batch concurrently
-                results = await asyncio.gather(*tasks, return_exceptions=True)
-                success_count += sum(1 for r in results if not isinstance(r, Exception))
-                failed_count += sum(1 for r in results if isinstance(r, Exception))
-
-                # Random delay between batches (0.5 to 1.5 seconds)
-                await asyncio.sleep(random.uniform(0.5, 1.5))
+                logger.info(f"Processing message {index}/{total_messages} for group {group.name}")
+                
+                endpoint = "send/image" if len(request_data.filePath) > 0 else "send/message"
+                payload = {
+                    "phone": group.id,
+                    "message": request_data.message if not len(request_data.filePath) > 0 else None,
+                    "caption": request_data.message if len(request_data.filePath) > 0 else None,
+                    **({"image_url": request_data.filePath} if len(request_data.filePath) > 0 else {})
+                }
+                
+                # Process message
+                secure_api_request(endpoint, payload, group.name)
+                success_count += 1
+                
+                # Add delay between messages (except after the last message)
+                if index < total_messages:
+                    delay = random.uniform(4, 6)
+                    logger.info(f"Waiting {delay:.1f} seconds before next message...")
+                    time.sleep(delay)
+                    
+            except Exception as e:
+                logger.error(f"Failed to send to {group.name}: {str(e)}")
+                failed_count += 1
+                
+                # Still add delay even after failed message
+                if index < total_messages:
+                    time.sleep(random.uniform(4, 6))
 
         execution_time = (perf_counter() - start_time) * 1000
+        logger.info(f"Queue execution completed in {execution_time:.0f}ms")
         
         return QueueResponse(
             success=failed_count == 0,
             executionTime=execution_time,
             summary={
-                "total": len(request_data.data),
+                "total": total_messages,
                 "successful": success_count,
                 "failed": failed_count
             }
         )
 
-    except HTTPException as http_error:
-        logger.error(f"HTTP error in queue execution: {str(http_error)}")
-        return {"success": False, "message": str(http_error.detail)}
     except Exception as error:
         logger.error(f"Queue execution failed: {str(error)}")
         return {"success": False, "message": f"Internal server error: {str(error)}"}
@@ -399,6 +402,7 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     )
 
 # Enhanced security headers middleware
+"""
 @app.middleware("http")
 async def add_security_headers(request: Request, call_next):
     response = await call_next(request)
@@ -414,7 +418,7 @@ async def add_security_headers(request: Request, call_next):
         "Expires": "0"
     })
     return response
-
+"""
 # Update request logging middleware with safe field names
 @app.middleware("http")
 async def request_logging_middleware(request: Request, call_next):
@@ -468,8 +472,6 @@ if __name__ == "__main__":
         "server:app",
         host="0.0.0.0",
         port=int(os.getenv("PORT", 8000)),
-        ssl_keyfile=os.getenv("SSL_KEYFILE") if not IS_DEV else None,
-        ssl_certfile=os.getenv("SSL_CERTFILE") if not IS_DEV else None,
         log_level="debug" if IS_DEV else "info",
         access_log=True,
         reload=IS_DEV,  # Enable auto-reload in development
