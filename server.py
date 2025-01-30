@@ -5,14 +5,11 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, AnyUrl, Field, field_validator, model_validator
 from typing import List, Optional, Dict, Any, Union
 import httpx
-import asyncio
 import base64
 import os
 import time
 import logging
 import hmac
-import hashlib
-import json
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
@@ -166,7 +163,7 @@ async def validate_api_request(request: Request):
         )
 
     try:
-        if not hmac.compare_digest(secret_key, SECRET_KEY):
+        if SECRET_KEY != secret_key:
             logger.warning("Invalid secret key")
             return JSONResponse(
                 status_code=401,
