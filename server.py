@@ -144,22 +144,6 @@ if not SECRET_KEY:
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=True)
 # hmac_header = APIKeyHeader(name="X-HMAC-Signature", auto_error=True)
 
-async def validate_request_timing(request: Request):
-    """Prevent replay attacks by validating request timing"""
-    if IS_DEV:
-        return True
-    
-    timestamp = request.headers.get("X-Request-Time")
-    if not timestamp:
-        raise HTTPException(status_code=400, detail="Missing timestamp")
-    
-    try:
-        request_time = int(timestamp)
-        if abs(time.time() - request_time) > 300:  # 5 minute window
-            raise HTTPException(status_code=400, detail="Request expired")
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid timestamp")
-
 def create_error_response(error_message: str) -> dict:
     """Utility function to create consistent error responses"""
     return {
@@ -172,7 +156,7 @@ api_key_header = APIKeyHeader(name="X-API-Key", auto_error=True)
 # hmac_header = APIKeyHeader(name="X-HMAC-Signature", auto_error=True)
 
 async def validate_api_request(request: Request):
-    """Validate secret key and request timing"""
+    """Validate secret key"""
     secret_key = request.headers.get("X-API-Key")
     
     if not secret_key:
@@ -188,9 +172,6 @@ async def validate_api_request(request: Request):
                 status_code=401,
                 content={"success": False, "message": "Invalid secret key"}
             )
-
-        if not IS_DEV:  # Skip timestamp validation in dev mode
-            await validate_request_timing(request)
         
         return True
         
@@ -285,8 +266,7 @@ async def secure_api_request(client: httpx.AsyncClient, endpoint: str, data: dic
     
     headers = {
         "Authorization": f"Basic {API_CONFIG['auth']}",
-        "Content-Type": "application/json",
-        "X-Request-Time": str(int(time.time()))
+        "Content-Type": "application/json"
     }
 
     try:
