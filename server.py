@@ -358,12 +358,36 @@ async def rate_limit_handler(request: Request, exc: RateLimitExceeded):
         content={"success": False, "message": "Rate limit exceeded"}
     )
 
+# Add a 404 handler right after the FastAPI initialization
+@app.exception_handler(404)
+async def not_found_handler(request: Request, exc: HTTPException):
+    return JSONResponse(
+        status_code=404,
+        content={"success": False, "message": "Not found"}
+    )
+
+# Update the HTTP exception handler
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"success": False, "message": str(exc.detail)}
+    )
+
+# Also add a catch-all route for undefined paths
+@app.api_route("/{path_name:path}", methods=["GET", "POST", "PUT", "DELETE"])
+async def catch_all(request: Request, path_name: str):
+    return JSONResponse(
+        status_code=404,
+        content={"success": False, "message": "Not found"}
+    )
+
 # Update FastAPI exception handlers
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request: Request, exc: HTTPException):
     return JSONResponse(
         status_code=exc.status_code,
-        content=create_error_response(exc.detail)
+        content={"success": False, "message": exc.detail}
     )
 
 # Update other exception handlers
