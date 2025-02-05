@@ -186,7 +186,7 @@ async def validate_hmac(request: Request, api_key: str = Security(api_key_header
 
 # Enhanced Models with Pydantic v2 validation
 class Group(BaseModel):
-    id: str = Field(min_length=10, max_length=50, pattern=r'^[0-9]+@[sg]\.(whatsapp\.net|us)$')
+    id: str = Field(min_length=10, max_length=50, pattern=r'^[0-9]+(-[0-9]+)?@[sg]\.(whatsapp\.net|us)$')
     name: str = Field(min_length=1, max_length=100)
     
     @field_validator('id')
