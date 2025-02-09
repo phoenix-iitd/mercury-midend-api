@@ -165,19 +165,20 @@ def secure_api_request(endpoint: str, data: dict, group_name: str) -> dict:
         raise
 
 # ---- New Helper: Log message in Firestore under structured "data" ----
-def log_message_firestore(user_id: str, group: Group, msg_text: str, device_id: str):
+def log_message_firestore(user_id: str, group: Group, msg_text: str, device_id: str, file_path: str = None, file_name: str = None):
     if not user_id:
         user_id = "unknown"   # Prevent empty document id
     now = datetime.datetime.now()
     date_str = now.strftime("%d %b, %Y")  # e.g. "09 Feb, 2025"
-    time_str = now.strftime("%H %M %S %d %b %Y")  # e.g. "11 44 24 09 Feb 2025"
+    time_str = now.strftime("%H:%M:%S %d %b, %Y")  # e.g. "11:44:24 09 Feb, 2025"
     message_data = {
         "exactTime": str(int(now.timestamp()*1000)),
         "msg": msg_text,
         "name": group.name,
         "time": time_str,
         "device_id": device_id,
-        "toWhom": [group.name]
+        "toWhom": [group.name],
+        **({"filePath": file_path, "fileName": file_name} if file_path else {})
     }
     db_firestore.collection("data")\
         .document(date_str)\
@@ -245,14 +246,12 @@ def execute_queue(request_data: QueueRequest, request: Request):
             endpoint = "send/image" if request_data.filePath else "send/message"
             payload = {
                 "phone": group.id,
-                "message": None if request_data.filePath else request_data.message,
-                "caption": request_data.message if request_data.filePath else None,
-                **({"image_url": request_data.filePath} if request_data.filePath else {})
+                ** ({"caption": request_data.message, "image_url": request_data.filePath} if request_data.filePath else {"message": request_data.message}),
             }
             secure_api_request(endpoint, payload, group.name)
             success_count += 1
             record_message_status(queue_ref, idx, group, "success")
-            log_message_firestore(user_id, group, request_data.message, device_id)
+            log_message_firestore(user_id, group, request_data.message, device_id, file_path=request_data.filePath, file_name=request_data.fileName)
             # Remove individual message from realtime db queue (using list index as key)
             rt_queue_ref.child("data").child(str(idx-1)).delete()
         except Exception as e:
