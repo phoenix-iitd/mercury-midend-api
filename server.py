@@ -237,10 +237,7 @@ class QueueRequest(BaseModel):
             
         if bool(filePath) != bool(fileName):
             raise ValueError("Both filePath and fileName must be provided together")
-        
-        if filePath and not filePath.startswith('https://'):
-            raise ValueError("Only HTTPS URLs are allowed")
-            
+                    
         return self
 
 class QueueResponse(BaseModel):

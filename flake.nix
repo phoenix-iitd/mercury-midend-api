@@ -14,8 +14,8 @@
       devShells = forEachSupportedSystem ({ pkgs }: {
         default = pkgs.mkShell {
           venvDir = ".venv";
-          packages = with pkgs; [ python311 poetry ] ++
-            (with pkgs.python311Packages; [
+          packages = with pkgs; [ python312 poetry firebase-tools ] ++
+            (with pkgs.python312Packages; [
               pip
               venvShellHook
             ]);
