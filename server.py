@@ -120,7 +120,6 @@ class Group(BaseModel):
 
 class QueueRequest(BaseModel):
     message: str = Field(..., min_length=1, max_length=10000)
-    time: int
     data: list[Group]
     filePath: str = ""  # if provided, sends image; otherwise sends text
     fileName: str = ""
@@ -137,16 +136,6 @@ class QueueResponse(BaseModel):
     success: bool
     executionTime: float
     summary: dict
-
-# Helper: Record individual message status in a subcollection
-def record_message_status(queue_ref, idx: int, group: Group, status: str, error: str = None):
-    queue_ref.collection("data").document(str(idx)).set({
-        "group_id": group.id,
-        "group_name": group.name,
-        "status": status,
-        "error": error,
-        "timestamp": firestore.SERVER_TIMESTAMP
-    })
 
 # Helper: send API request (synchronous)
 def secure_api_request(endpoint: str, data: dict, group_name: str) -> dict:
@@ -173,32 +162,32 @@ def log_message_firestore(user_id: str, group: Group, msg_text: str, device_id: 
     time_str = now.strftime("%H:%M:%S %d %b, %Y")  # e.g. "11:44:24 09 Feb, 2025"
     message_data = {
         "exactTime": str(int(now.timestamp()*1000)),
-        "msg": msg_text,
-        "name": group.name,
+        "message": msg_text,
+        "user_id": user_id,
         "time": time_str,
         "device_id": device_id,
         "toWhom": [group.name],
         **({"filePath": file_path, "fileName": file_name} if file_path else {})
     }
-    db_firestore.collection("data")\
+    db_firestore.collection("log")\
         .document(date_str)\
-        .collection("users")\
-        .document(user_id)\
-        .collection("logs")\
+        .collection(user_id)\
         .add(message_data)
 # ---- End New Helper ----
 
 # ---- New Helper: Update Realtime Database Queue ----
 def create_rt_queue(queue_id: str, request_data: QueueRequest):
+    now = datetime.datetime.now()
     # Store entire queue in realtime database
     rt_ref = db.reference("queue").child(queue_id)
     rt_ref.set({
         "device_id": request_data.device_id,
         "user_id": request_data.user_id,
-        "msg": request_data.message,
+        "message": request_data.message,
         "filePath": request_data.filePath,
         "fileName": request_data.fileName,
-        "time": str(request_data.time),
+        "time": now.strftime("%H:%M:%S %d %b, %Y"),
+        "exactTime": str(int(now.timestamp()*1000)),
         "data": [{"id": grp.id, "name": grp.name} for grp in request_data.data]
     })
     return rt_ref
@@ -217,23 +206,10 @@ def execute_queue(request_data: QueueRequest, request: Request):
     total = len(request_data.data)
     device_id = request_data.device_id
     user_id = request_data.user_id
-
-    # ---- Create a Firestore document for this queue ----
-    queue_ref = db_firestore.collection("queue").document(str(request_data.time))
-    queue_ref.set({
-        "device_id": device_id,
-        "user_id": user_id,
-        "message": request_data.message,
-        "filePath": request_data.filePath,
-        "fileName": request_data.fileName,
-        "num_groups": total,
-        "status": "processing",
-        "timestamp": firestore.SERVER_TIMESTAMP
-    })
-    # ---- End Firestore queue creation ----
+    current_time = str(int(datetime.datetime.now().timestamp() * 1000))
 
     # ---- Create realtime database queue ----
-    rt_queue_ref = create_rt_queue(str(request_data.time), request_data)
+    rt_queue_ref = create_rt_queue(current_time, request_data)
     # ---- End realtime queue creation ----
 
     for idx, group in enumerate(request_data.data, 1):
@@ -250,14 +226,12 @@ def execute_queue(request_data: QueueRequest, request: Request):
             }
             secure_api_request(endpoint, payload, group.name)
             success_count += 1
-            record_message_status(queue_ref, idx, group, "success")
             log_message_firestore(user_id, group, request_data.message, device_id, file_path=request_data.filePath, file_name=request_data.fileName)
             # Remove individual message from realtime db queue (using list index as key)
             rt_queue_ref.child("data").child(str(idx-1)).delete()
         except Exception as e:
             failed_count += 1
             logger.error(f"Error for {group.name}: {str(e)}", extra={'correlation_id': correlation_id})
-            record_message_status(queue_ref, idx, group, "failure", str(e))
         if idx < total:
             delay = random.uniform(4, 6)
             logger.debug(f"Delay between messages: {delay:.1f}s", extra={'correlation_id': correlation_id})
@@ -266,14 +240,6 @@ def execute_queue(request_data: QueueRequest, request: Request):
     exec_time = (perf_counter() - start) * 1000
     logger.info(f"Completed queue in {exec_time:.0f}ms | Success: {success_count}, Failed: {failed_count}", extra={'correlation_id': correlation_id})
     
-    # ---- Update Firestore queue document with summary ----
-    queue_ref.update({
-        "summary": {"total": total, "successful": success_count, "failed": failed_count},
-        "status": "completed",
-        "completed_timestamp": firestore.SERVER_TIMESTAMP
-    })
-    # ---- End Firestore update ----
-
     # ---- Remove realtime database queue node completely if processing is done ----
     rt_queue_ref.delete()
     # ---- End realtime removal ----
