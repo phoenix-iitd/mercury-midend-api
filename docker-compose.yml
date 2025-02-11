@@ -4,11 +4,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-      args:
-        MIDEND_PORT: $MIDEND_PORT
-        GOOGLE_APPLICATION_CREDENTIALS: $GOOGLE_APPLICATION_CREDENTIALS
     ports:
-      - $MIDEND_PORT:$MIDEND_PORT
+      - "9696:9696"
     env_file:
       - ./.env
     restart: always
