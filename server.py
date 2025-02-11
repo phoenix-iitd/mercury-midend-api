@@ -16,37 +16,6 @@ from firebase_admin import credentials, firestore, db  # updated to import realt
 # Load environment variables from .env and verify required ones
 load_dotenv()
 
-# ---- Update Firebase Initialization for Realtime DB ----
-load_dotenv()
-project_id = os.getenv("GOOGLE_CLOUD_PROJECT")
-if not project_id:
-    raise ValueError("GOOGLE_CLOUD_PROJECT environment variable is required")
-database_url = os.getenv("DATABASE_URL")
-if not database_url:
-    raise ValueError("DATABASE_URL environment variable is required for realtime database")
-
-def check_firebase_auth():
-    try:
-        # Try to access Firestore to verify credentials
-        db_firestore = firestore.client()
-        db_firestore.collection('_check_auth').limit(1).get()
-        # Try to access Realtime Database
-        db.reference('/_check_auth').get()
-        print("Firebase authentication successful")
-        return True
-    except Exception as e:
-        print(f"Firebase authentication failed: {str(e)}")
-        raise ValueError("Firebase authentication failed. Please check your credentials.")
-
-if not firebase_admin._apps:
-    cred = credentials.ApplicationDefault()
-    firebase_admin.initialize_app(cred, {'projectId': project_id, 'databaseURL': database_url})
-    check_firebase_auth()  # Verify authentication after initialization
-
-db_firestore = firestore.client()
-# Rename Firestore client variable to db_firestore for clarity
-# ---- End Firebase Initialization ----
-
 REQUIRED_VARS = ["API_BASE_URL", "API_PORT", "API_USER", "API_PASS", "SECRET_KEY"]
 missing = [var for var in REQUIRED_VARS if not os.getenv(var)]
 if missing:
@@ -61,6 +30,7 @@ API_CONFIG = {
     "auth": base64.b64encode(f"{os.getenv('API_USER')}:{os.getenv('API_PASS')}".encode()).decode()
 }
 SECRET_KEY = os.getenv("SECRET_KEY")
+
 
 # Custom logging formatter to safely handle missing correlation_id
 import logging
@@ -113,6 +83,41 @@ handler.setFormatter(formatter)
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG if IS_DEV else logging.INFO)
 logger.addHandler(handler)
+
+# ---- Update Firebase Initialization for Realtime DB ----
+project_id = os.getenv("GOOGLE_CLOUD_PROJECT")
+if not project_id:
+    raise ValueError("GOOGLE_CLOUD_PROJECT environment variable is required")
+database_url = os.getenv("DATABASE_URL")
+if not database_url:
+    raise ValueError("DATABASE_URL environment variable is required for realtime database")
+cred_json = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
+if not cred_json:
+    raise ValueError("GOOGLE_APPLICATION_CREDENTIALS environment variable is required for realtime database")
+
+
+def check_firebase_auth():
+    try:
+        # Try to access Firestore to verify credentials
+        db_firestore = firestore.client()
+        db_firestore.collection('_check_auth').limit(1).get()
+        # Try to access Realtime Database
+        db.reference('/_check_auth').get()
+        logger.info("Firebase authentication successful")
+        return True
+    except Exception as e:
+        logger.error(f"Firebase authentication failed: {str(e)}")
+        raise ValueError("Firebase authentication failed. Please check your credentials.")
+
+if not firebase_admin._apps:
+    cred = credentials.Certificate(cred_json)
+    firebase_admin.initialize_app(cred, {'projectId': project_id, 'databaseURL': database_url})
+    check_firebase_auth()  # Verify authentication after initialization
+
+db_firestore = firestore.client()
+# Rename Firestore client variable to db_firestore for clarity
+# ---- End Firebase Initialization ----
+
 
 # Initialize FastAPI with trusted hosts; allows auto-reload in dev from command-line
 app = FastAPI(docs_url="/docs" if IS_DEV else None)
