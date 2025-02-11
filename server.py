@@ -24,8 +24,11 @@ if not project_id:
 database_url = os.getenv("DATABASE_URL")
 if not database_url:
     raise ValueError("DATABASE_URL environment variable is required for realtime database")
+cred_json = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
+if not database_url:
+    raise ValueError("GOOGLE_APPLICATION_CREDENTIALS environment variable is required for realtime database")
 if not firebase_admin._apps:
-    cred = credentials.ApplicationDefault()
+    cred = credentials.Certificate(cred_json)
     firebase_admin.initialize_app(cred, {'projectId': project_id, 'databaseURL': database_url})
 db_firestore = firestore.client()
 # Rename Firestore client variable to db_firestore for clarity
