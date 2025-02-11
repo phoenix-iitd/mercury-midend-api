@@ -87,13 +87,13 @@ logger.addHandler(handler)
 # ---- Update Firebase Initialization for Realtime DB ----
 project_id = os.getenv("GOOGLE_CLOUD_PROJECT")
 if not project_id:
-    raise ValueError("GOOGLE_CLOUD_PROJECT environment variable is required")
+    logger.error("GOOGLE_CLOUD_PROJECT environment variable is required")
 database_url = os.getenv("DATABASE_URL")
 if not database_url:
-    raise ValueError("DATABASE_URL environment variable is required for realtime database")
+    logger.error("DATABASE_URL environment variable is required for realtime database")
 cred_json = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
 if not cred_json:
-    raise ValueError("GOOGLE_APPLICATION_CREDENTIALS environment variable is required for realtime database")
+    logger.error("GOOGLE_APPLICATION_CREDENTIALS environment variable is required for realtime database")
 
 
 def check_firebase_auth():
@@ -166,7 +166,7 @@ def secure_api_request(endpoint: str, data: dict, group_name: str) -> dict:
         "Content-Type": "application/json"
     }
     try:
-        response = httpx.post(url, json=data, headers=headers, timeout=10.0)
+        response = httpx.post(url, json=data, headers=headers, timeout=1000)
         response.raise_for_status()
         logger.info(f"Message sent to {group_name} ({data['phone']})", extra={'correlation_id': 'sync'})
         return response.json()
