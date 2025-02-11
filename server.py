@@ -24,9 +24,6 @@ if not project_id:
 database_url = os.getenv("DATABASE_URL")
 if not database_url:
     raise ValueError("DATABASE_URL environment variable is required for realtime database")
-cred_json = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
-if not cred_json:
-    raise ValueError("GOOGLE_APPLICATION_CREDENTIALS environment variable is required for realtime database")
 
 def check_firebase_auth():
     try:
