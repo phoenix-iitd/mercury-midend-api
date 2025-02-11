@@ -27,9 +27,25 @@ if not database_url:
 cred_json = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
 if not cred_json:
     raise ValueError("GOOGLE_APPLICATION_CREDENTIALS environment variable is required for realtime database")
+
+def check_firebase_auth():
+    try:
+        # Try to access Firestore to verify credentials
+        db_firestore = firestore.client()
+        db_firestore.collection('_check_auth').limit(1).get()
+        # Try to access Realtime Database
+        db.reference('/_check_auth').get()
+        print("Firebase authentication successful")
+        return True
+    except Exception as e:
+        print(f"Firebase authentication failed: {str(e)}")
+        raise ValueError("Firebase authentication failed. Please check your credentials.")
+
 if not firebase_admin._apps:
-    cred = credentials.Certificate(cred_json)
+    cred = credentials.ApplicationDefault()
     firebase_admin.initialize_app(cred, {'projectId': project_id, 'databaseURL': database_url})
+    check_firebase_auth()  # Verify authentication after initialization
+
 db_firestore = firestore.client()
 # Rename Firestore client variable to db_firestore for clarity
 # ---- End Firebase Initialization ----

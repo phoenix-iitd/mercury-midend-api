@@ -1,3 +1,5 @@
 .env
 __pycache__/
 .venv/
+application_default_credentials.json
+mercury-78d34-firebase-adminsdk-hpl3c-25d48c3da0.json
