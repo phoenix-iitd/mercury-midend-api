@@ -1,6 +1,9 @@
 import logging
 
-def add_correlation_id(msg: str, correlation_id: str = "NO_CORR_ID", level: int = logging.INFO) -> str:
+
+def add_correlation_id(
+    msg: str, correlation_id: str = "NO_CORR_ID", level: int = logging.INFO
+) -> str:
     if level == logging.DEBUG:
         color = "\033[90m"  # gray
     elif level == logging.INFO:
