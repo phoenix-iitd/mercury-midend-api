@@ -1,4 +1,4 @@
-import os, time, random, base64, logging
+import os, time, random, base64
 from uuid import uuid4
 from time import perf_counter
 import httpx
@@ -11,78 +11,42 @@ import uvicorn
 from dotenv import load_dotenv
 import datetime
 import firebase_admin
-from firebase_admin import credentials, firestore, db  # updated to import realtime db
+from firebase_admin import credentials, firestore, db
+from google.cloud.firestore_v1.base_query import FieldFilter, BaseCompositeFilter
+from typing import Optional
+import logging
 
-# Load environment variables from .env and verify required ones
+# Load environment variables and setup initial config
 load_dotenv()
-
-REQUIRED_VARS = ["API_BASE_URL", "API_PORT", "API_USER", "API_PASS", "SECRET_KEY"]
-missing = [var for var in REQUIRED_VARS if not os.getenv(var)]
-if missing:
-    raise ValueError(f"Missing environment variables: {', '.join(missing)}")
-
 IS_DEV = os.getenv("ENVIRONMENT", "development").lower() == "development"
 
-# API configuration
+# Updated helper to prepend colored correlation id to messages based on log level
+def add_correlation_id(msg: str, correlation_id: str = "NO_CORR_ID", level: int = logging.INFO) -> str:
+    if level == logging.DEBUG:
+        color = "\033[90m"  # gray
+    elif level == logging.INFO:
+        color = "\033[32m"  # green
+    elif level == logging.WARNING:
+        color = "\033[38;5;208m"  # orange
+    elif level == logging.ERROR:
+        color = "\033[31m"  # red
+    else:
+        color = ""
+    reset = "\033[0m"
+    return f"{color}[{correlation_id}]{reset} {msg}"
+
+# Initialize FastAPI and get Uvicorn logger
+app = FastAPI(title='Mercury Midend API', docs_url="/docs" if IS_DEV else None)
+logger = logging.getLogger("uvicorn.error")
+logger.setLevel(logging.DEBUG if IS_DEV else logging.INFO)
+
+# Load environment variables from .env and verify required ones
 API_CONFIG = {
     "base_url": os.getenv("API_BASE_URL"),
     "port": int(os.getenv("API_PORT")),
     "auth": base64.b64encode(f"{os.getenv('API_USER')}:{os.getenv('API_PASS')}".encode()).decode()
 }
 SECRET_KEY = os.getenv("SECRET_KEY")
-
-
-# Custom logging formatter to safely handle missing correlation_id
-import logging
-
-class SafeFormatter(logging.Formatter):
-    def format(self, record):
-        if not hasattr(record, 'correlation_id'):
-            record.correlation_id = 'NO_CORR_ID'
-        # Get formatted time and bold it for INFO; otherwise use unmodified
-        timestamp = self.formatTime(record)
-        bold_timestamp = f"\033[1m{timestamp}\033[0m"
-
-        # Color the level name based on the log level.
-        level = record.levelname.strip()
-        if record.levelno == logging.DEBUG:
-            colored_level = f"\033[90m{level}\033[0m"
-        elif record.levelno == logging.INFO:
-            colored_level = f"\033[32m{level}\033[0m"
-        elif record.levelno == logging.WARNING:
-            colored_level = f"\033[38;5;208m{level}\033[0m"
-        elif record.levelno == logging.ERROR:
-            colored_level = f"\033[31m{level}\033[0m"
-        else:
-            colored_level = level
-        # Preserve fixed width
-        record.levelname = colored_level.ljust(8)
-
-        # For INFO logs, also color "Success:" if present.
-        if record.levelno == logging.INFO and isinstance(record.msg, str):
-            record.msg = record.msg.replace("Success:", "\033[32mSuccess:\033[0m")
-
-        if isinstance(record.msg, str):
-            record.msg = record.msg.replace("Failed:", "\033[31mFailed:\033[0m")
-
-        message = record.getMessage()
-
-        # Assemble the final text.
-        text = f"{bold_timestamp} - {record.levelname} - [{record.correlation_id}] {message}"
-
-        # For DEBUG logs, wrap the whole text in gray.
-        if record.levelno == logging.DEBUG:
-            text = f"\033[90m{text}\033[0m"
-        return text
-
-handler = logging.StreamHandler()
-# Use fixed width for level output as shown in formatter string below
-formatter = SafeFormatter('%(asctime)s - %(levelname)s - [%(correlation_id)s] %(message)s')
-handler.setFormatter(formatter)
-
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.DEBUG if IS_DEV else logging.INFO)
-logger.addHandler(handler)
 
 # ---- Update Firebase Initialization for Realtime DB ----
 project_id = os.getenv("GOOGLE_CLOUD_PROJECT")
@@ -103,10 +67,10 @@ def check_firebase_auth():
         db_firestore.collection('_check_auth').limit(1).get()
         # Try to access Realtime Database
         db.reference('/_check_auth').get()
-        logger.info("Firebase authentication successful")
+        logger.info(add_correlation_id("Firebase authentication successful", "firebase_init", logging.INFO))
         return True
     except Exception as e:
-        logger.error(f"Firebase authentication failed: {str(e)}")
+        logger.error(add_correlation_id(f"Firebase authentication failed: {str(e)}", "firebase_init", logging.ERROR))
         raise ValueError("Firebase authentication failed. Please check your credentials.")
 
 if not firebase_admin._apps:
@@ -158,6 +122,13 @@ class QueueResponse(BaseModel):
     executionTime: float
     summary: dict
 
+class RevokeRequest(BaseModel):
+    user_id: str
+    device_id: str
+    message_text: str
+    date_str: str
+    max_age_hours: Optional[int] = Field(default=8, ge=1, le=24)  # WhatsApp generally allows ~8 hours
+
 # Helper: send API request (synchronous)
 def secure_api_request(endpoint: str, data: dict, group_name: str) -> dict:
     url = f"http://{API_CONFIG['base_url']}:{API_CONFIG['port']}/{endpoint}"
@@ -166,16 +137,16 @@ def secure_api_request(endpoint: str, data: dict, group_name: str) -> dict:
         "Content-Type": "application/json"
     }
     try:
-        response = httpx.post(url, json=data, headers=headers, timeout=1000.0)
+        response = httpx.post(url, json=data, headers=headers, timeout=10.0)
         response.raise_for_status()
-        logger.info(f"Message sent to {group_name} ({data['phone']})", extra={'correlation_id': 'sync'})
+        logger.info(add_correlation_id(f"Message sent to {group_name} ({data['phone']})", "sync", logging.INFO))
         return response.json()
     except Exception as error:
-        logger.error(f"Failed to send to {group_name}: {str(error)}", extra={'correlation_id': 'sync'})
+        logger.error(add_correlation_id(f"Failed to send to {group_name}: {str(error)}", "sync", logging.ERROR))
         raise
 
 # ---- New Helper: Log message in Firestore under structured "data" ----
-def log_message_firestore(user_id: str, group: Group, msg_text: str, device_id: str, file_path: str = None, file_name: str = None):
+def log_message_firestore(user_id: str, group: Group, msg_text: str, device_id: str, message_id: str, file_path: str = None, file_name: str = None):
     if not user_id:
         user_id = "unknown"   # Prevent empty document id
     now = datetime.datetime.now()
@@ -187,6 +158,8 @@ def log_message_firestore(user_id: str, group: Group, msg_text: str, device_id: 
         "user_id": user_id,
         "time": time_str,
         "device_id": device_id,
+        "message_id": message_id,  # Store message_id from API response
+        "toWhomID": [group.id],  # Store ID instead of name for revocation
         "toWhom": [group.name],
         **({"filePath": file_path, "fileName": file_name} if file_path else {})
     }
@@ -216,11 +189,11 @@ def create_rt_queue(queue_id: str, request_data: QueueRequest):
 
 # executeQueue endpoint: synchronous processing with delays, logging, and Firestore tracking
 @app.post("/executeQueue", response_model=QueueResponse)
-def execute_queue(request_data: QueueRequest, request: Request):
+async def execute_queue(request_data: QueueRequest, request: Request):
     # Validate API key
     validate_api_request(request)
     correlation_id = str(uuid4())
-    logger.info("Starting queue execution", extra={'correlation_id': correlation_id})
+    logger.info(add_correlation_id("Starting queue execution", correlation_id, logging.INFO))
     start = perf_counter()
     success_count = 0
     failed_count = 0
@@ -237,29 +210,30 @@ def execute_queue(request_data: QueueRequest, request: Request):
         try:
             if idx == 1:
                 delay = random.uniform(2, 3)
-                logger.debug(f"Initial delay: {delay:.1f}s", extra={'correlation_id': correlation_id})
+                logger.debug(add_correlation_id(f"Initial delay: {delay:.1f}s", correlation_id, logging.DEBUG))
                 time.sleep(delay)
-            logger.info(f"Processing {idx}/{total} for group {group.name}", extra={'correlation_id': correlation_id})
+            logger.info(add_correlation_id(f"Processing {idx}/{total} for group {group.name}", correlation_id, logging.INFO))
             endpoint = "send/image" if request_data.filePath else "send/message"
             payload = {
                 "phone": group.id,
                 ** ({"caption": request_data.message, "image_url": request_data.filePath} if request_data.filePath else {"message": request_data.message}),
             }
-            secure_api_request(endpoint, payload, group.name)
+            response = secure_api_request(endpoint, payload, group.name)
+            message_id = response.get("results", {}).get("message_id")
             success_count += 1
-            log_message_firestore(user_id, group, request_data.message, device_id, file_path=request_data.filePath, file_name=request_data.fileName)
+            log_message_firestore(user_id, group, request_data.message, device_id, message_id, file_path=request_data.filePath, file_name=request_data.fileName)
             # Remove individual message from realtime db queue (using list index as key)
             rt_queue_ref.child("data").child(str(idx-1)).delete()
         except Exception as e:
             failed_count += 1
-            logger.error(f"Error for {group.name}: {str(e)}", extra={'correlation_id': correlation_id})
+            logger.error(add_correlation_id(f"Error for {group.name}: {str(e)}", correlation_id, logging.ERROR))
         if idx < total:
             delay = random.uniform(4, 6)
-            logger.debug(f"Delay between messages: {delay:.1f}s", extra={'correlation_id': correlation_id})
+            logger.debug(add_correlation_id(f"Delay between messages: {delay:.1f}s", correlation_id, logging.DEBUG))
             time.sleep(delay)
 
     exec_time = (perf_counter() - start) * 1000
-    logger.info(f"Completed queue in {exec_time:.0f}ms | Success: {success_count}, Failed: {failed_count}", extra={'correlation_id': correlation_id})
+    logger.info(add_correlation_id(f"Completed queue in {exec_time:.0f}ms | Success: {success_count}, Failed: {failed_count}", correlation_id, logging.INFO))
     
     # ---- Remove realtime database queue node completely if processing is done ----
     rt_queue_ref.delete()
@@ -267,10 +241,113 @@ def execute_queue(request_data: QueueRequest, request: Request):
 
     return QueueResponse(success=(failed_count == 0), executionTime=exec_time, summary={"total": total, "successful": success_count, "failed": failed_count})
 
+# New revokeQueue endpoint
+@app.post("/revokeQueue")
+async def revoke_queue(request_data: RevokeRequest, request: Request):
+    validate_api_request(request)
+    correlation_id = str(uuid4())
+    logger.info(add_correlation_id(f"Revoking messages for {request_data.user_id}", correlation_id, logging.INFO))
+    
+    # Calculate time window for revocation
+    now = datetime.datetime.now()
+    current_time = int(now.timestamp() * 1000)
+    cutoff_time = int((now - datetime.timedelta(hours=request_data.max_age_hours)).timestamp() * 1000)
+    
+    logger.debug(add_correlation_id(f"Time window: {cutoff_time} to {current_time}", correlation_id, logging.DEBUG))
+    logger.debug(add_correlation_id(f"Search criteria: device_id={request_data.device_id}, message={request_data.message_text}", correlation_id, logging.DEBUG))
+    
+    try:
+        # First try with compound query (requires index)
+        logs_ref = db_firestore.collection("log")\
+            .document(request_data.date_str)\
+            .collection(request_data.user_id)
+            
+        try:
+            # Using only a simple query to filter results by device_id
+            simple_docs = list(logs_ref.where(filter=FieldFilter("device_id", "==", request_data.device_id)).stream())
+            logger.debug(add_correlation_id(f"Simple query found {len(simple_docs)} documents", correlation_id, logging.DEBUG))
+            
+            docs = []
+            for doc in simple_docs:
+                data = doc.to_dict()
+                if (data.get("message") == request_data.message_text and
+                    cutoff_time <= int(data.get("exactTime", "0")) <= current_time and data.get("status") != "REVOKED"):
+                    docs.append(doc)
+                    logger.debug(add_correlation_id(f"Matched document {doc.id}", correlation_id, logging.DEBUG))
+                else:
+                    logger.debug(add_correlation_id(f"Filtered out document {doc.id}", correlation_id, logging.DEBUG))
+        except Exception as e:
+            logger.error(add_correlation_id(f"Failed to execute simple query: {str(e)}", correlation_id, logging.ERROR))
+            raise
+    
+    except Exception as e:
+        logger.error(add_correlation_id(f"Failed to query Firestore: {str(e)}", correlation_id, logging.ERROR))
+        raise HTTPException(status_code=500, detail="Failed to query messages")
+    
+    revoked_count = 0
+    failed_count = 0
+    skipped_count = 0
+    
+    try:
+        logger.debug(add_correlation_id(f"Found {len(docs)} messages within time window", correlation_id, logging.DEBUG))
+        
+        for doc in docs:
+            data = doc.to_dict()
+            message_id = data.get("message_id")
+            phone = data.get("toWhomID", [])[0] if data.get("toWhomID") else None
+            
+            if not message_id or not phone:
+                logger.warning(add_correlation_id(f"Missing message_id or phone for doc {doc.id}", correlation_id, logging.WARNING))
+                skipped_count += 1
+                continue
+            
+            # Rest of revocation logic remains the same
+            logger.debug(add_correlation_id(f"Processing revocation for message_id: {message_id}, phone: {phone}", correlation_id, logging.DEBUG))
+            
+            revoke_url = f"http://{API_CONFIG['base_url']}:{API_CONFIG['port']}/message/{message_id}/revoke"
+            payload = {"phone": phone}
+            
+            logger.debug(add_correlation_id(f"Sending revoke request to {revoke_url} with payload {payload}", correlation_id, logging.DEBUG))
+            try:
+                response = httpx.post(
+                    revoke_url, 
+                    json=payload,
+                    headers={
+                        "Authorization": f"Basic {API_CONFIG['auth']}",
+                        "Content-Type": "application/json"
+                    },
+                    timeout=10.0
+                )
+                response.raise_for_status()
+                logger.debug(add_correlation_id(f"Revoke request successful for message {message_id}", correlation_id, logging.DEBUG))
+                doc.reference.update({
+                    "status": "REVOKED",
+                    "revokedAt": datetime.datetime.now().strftime("%H:%M:%S %d %b, %Y")
+                })
+                logger.debug(add_correlation_id(f"Updated document {doc.id} with revoked status", correlation_id, logging.DEBUG))
+                revoked_count += 1
+                logger.info(add_correlation_id(f"Revoked message {message_id} for {phone}", correlation_id, logging.INFO))
+            except Exception as e:
+                failed_count += 1
+                logger.error(add_correlation_id(f"Failed to revoke {message_id} for {phone}: {str(e)}", correlation_id, logging.ERROR))
+    except Exception as e:
+        logger.error(add_correlation_id(f"Failed to query Firestore: {str(e)}", correlation_id, logging.ERROR))
+        raise HTTPException(status_code=500, detail="Failed to query messages")
+    
+    return {
+        "success": failed_count == 0,
+        "summary": {
+            "revoked": revoked_count,
+            "failed": failed_count,
+            "skipped": skipped_count,
+            "time_window": f"Last {request_data.max_age_hours} hours"
+        }
+    }
+
 # Global exception handler for unexpected errors
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
-    logger.error(f"Unhandled exception: {str(exc)}", exc_info=True)
+    logger.error(add_correlation_id(f"Unhandled exception: {str(exc)}", "NO_CORR_ID", logging.ERROR))
     return JSONResponse(status_code=500, content={"success": False, "message": "Internal server error"})
 
 # ---- HTTPException handler for error responses with success: false ----
@@ -285,6 +362,5 @@ if __name__ == "__main__":
         "server:app",
         host=os.getenv("MIDEND_BASE_URL", "127.0.0.1"),
         port=int(os.getenv("MIDEND_PORT", 8000)),
-        log_level="debug" if IS_DEV else "info",
         reload=IS_DEV  # auto-reload enabled in development
     )
