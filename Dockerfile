@@ -11,6 +11,8 @@ COPY ./$GOOGLE_APPLICATION_CREDENTIALS /code/$GOOGLE_APPLICATION_CREDENTIALS
 
 COPY ./server.py /code/server.py
 
+COPY ./utils /code/utils
+
 RUN pip install --no-cache-dir --upgrade --progress-bar off -r requirements.txt
 
 # Command to run the application
