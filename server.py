@@ -44,7 +44,7 @@ app.add_middleware(
     allowed_hosts=[
         h.strip() for h in os.getenv("ALLOWED_HOSTS", "*").split(",") if h.strip()
     ],
-)
+) 
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=True)
 
 
