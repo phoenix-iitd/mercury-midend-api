@@ -198,6 +198,7 @@ class GlobalQueue:
     async def _send_message(self, message: QueueMessage) -> bool:
         """Send a message via the API"""
         try:
+            logger.info("Sending message", message=message)
             endpoint = "send/image" if message.file_path else "send/message"
             url = f"http://{self.api_config['base_url']}:{self.api_config['port']}/{endpoint}"
             
@@ -389,6 +390,7 @@ global_queue = GlobalQueue()
 async def init_global_queue(api_base_url: str, api_port: int, api_auth: str):
     """Initialize and start the global queue"""
     global_queue.configure_api(api_base_url, api_port, api_auth)
+    logger.info("Global queue configured", api_base_url=api_base_url, api_port=api_port, api_auth=api_auth)
     await global_queue.start()
     
 async def close_global_queue():
